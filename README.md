@@ -1,28 +1,27 @@
 # Tomb Raider 2013 Camera Fix
 
-A one-file Windows utility for Tomb Raider (2013) PC version `1.1.743.0`.
+Made and tested for Tomb Raider (2013) PC, Steam build 743.0.
 
 ## What it fixes
 
 This utility removes the normal gameplay camera wobble or head-bob while controlling Lara. It also disables horizontal and vertical camera auto-centering, including the automatic rotation back toward the direction Lara is facing.
 
-The result is freer mouse camera control with substantially less unwanted camera movement. Only `TombRaider.exe` version `1.1.743.0` is supported.
+The result is freer mouse camera control with substantially less unwanted camera movement. Steam build 743.0 is the currently supported build.
 
 ## Installation
 
-1. In Steam, select the Tomb Raider (2013) game build that provides `TombRaider.exe` version `1.1.743.0`.
-2. After changing the build, use Steam's **Verify integrity of game files** option so the installation is clean and matches that version.
-3. Make sure the game is closed.
-4. Download and run [`TombRaider-Camera-Fix.bat`](TombRaider-Camera-Fix.bat).
-5. The utility searches normal Steam folders and Steam libraries for `TombRaider.exe`. If it finds more than one installation, choose the correct one. If it cannot find one automatically, select the executable in the file window or enter its full path.
-6. Choose **Apply complete camera fix**, then type `APPLY` when prompted. Windows may request administrator permission if the game folder is protected.
-7. Start the game normally through Steam.
+1. In Steam, set Tomb Raider (2013) to build 743.0.
+2. After selecting build 743.0, use Steam's **Verify integrity of game files** option so the installation is clean and matches that build.
+3. Make sure Tomb Raider is closed.
+4. Download and run [`TombRaider-Camera-Fix.bat`](TombRaider-Camera-Fix.bat). The utility searches normal Steam folders and Steam libraries for `TombRaider.exe`. If it finds more than one installation, choose the correct one. If it cannot find one automatically, select the executable in the file window or enter its full path.
+5. Choose **Apply complete camera fix**, then type `APPLY` when prompted. Windows may request administrator permission if the game folder is protected.
+6. Start the game normally through Steam.
 
 Running the utility again is safe. It checks the current state and does not rewrite an executable that is already fully patched.
 
 ## How it works
 
-The utility does not distribute a modified game executable. It checks the user's own `TombRaider.exe`, verifies the filename, executable type, `1.1.743.0` file version, and expected byte patterns, then patches three camera-related instruction regions locally. It verifies the prepared and final files and refuses to write if the executable or patterns are unsupported or ambiguous.
+The utility does not distribute a modified game executable. It checks the user's own `TombRaider.exe` and verifies that the executable matches the expected build and byte patterns before patching three camera-related instruction regions locally. It verifies the prepared and final files and refuses to write if the executable or patterns are unsupported or ambiguous.
 
 Before the first patch, it creates a verified original backup and a small verification manifest beside the game executable. Existing valid backup files are preserved and untrusted or incomplete backups are never overwritten.
 
