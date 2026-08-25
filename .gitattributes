@@ -1,0 +1,5 @@
+/TombRaider-Camera-Fix.bat binary
+*.md text eol=lf
+*.ps1 text eol=lf
+*.yml text eol=lf
+/src/*.bat text eol=crlf

@@ -1,4 +1,6 @@
 @echo off
+rem GENERATED FILE: contributors should edit the source files in src.
+rem Rebuild the ready-to-run batch with build\Build-Release.ps1.
 setlocal DisableDelayedExpansion
 chcp 65001 >nul
 set "TRCF_SELF=%~f0"
@@ -55,7 +57,7 @@ param(
 
     [switch]$ElevatedFromEnvironment
 )
-
+# BEGIN GENERATED SOURCE: src/CameraFixEngine.ps1
 # Tomb Raider Complete Camera Fix - testable patching engine
 # This file contains no interactive UI and never searches a Steam installation.
 
@@ -1008,7 +1010,11 @@ function Invoke-CameraFixRestore {
         }
     }
 }
+# END GENERATED SOURCE: src/CameraFixEngine.ps1
 
+# BEGIN GENERATED SOURCE: src/CameraFixInterface.ps1
+# Tomb Raider Complete Camera Fix - user interface and Windows integration
+# Build-Release.ps1 loads CameraFixEngine.ps1 before this file.
 
 if (-not [string]::IsNullOrWhiteSpace($StandaloneBatchPath)) {
     $script:CameraFixStandaloneBatchPath = [IO.Path]::GetFullPath($StandaloneBatchPath)
@@ -1490,3 +1496,4 @@ if (-not $LibraryMode) {
         }
     }
 }
+# END GENERATED SOURCE: src/CameraFixInterface.ps1
