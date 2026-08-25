@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build ready-to-run batch
         shell: powershell
@@ -37,7 +37,7 @@ jobs:
         run: .\build\Test-Release.ps1
 
       - name: Upload ready-to-run batch
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: TombRaider-Camera-Fix
           path: TombRaider-Camera-Fix.bat
@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: Download ready-to-run batch
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: TombRaider-Camera-Fix
 

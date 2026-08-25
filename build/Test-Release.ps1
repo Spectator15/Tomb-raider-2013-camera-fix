@@ -563,3 +563,4 @@ if ($script:FailedTests.Count -gt 0) {
 }
 
 Write-Host "$($script:PassedTestCount) test groups passed. All fixtures were disposable synthetic files." -ForegroundColor Green
+exit 0
