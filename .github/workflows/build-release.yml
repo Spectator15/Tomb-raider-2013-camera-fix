@@ -63,8 +63,12 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME
           $repository = $env:GITHUB_REPOSITORY
-          gh release view $tag --repo $repository *> $null
-          if ($LASTEXITCODE -eq 0) {
+          $previousErrorActionPreference = $ErrorActionPreference
+          $ErrorActionPreference = "Continue"
+          $null = gh release view $tag --repo $repository 2>&1
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $ErrorActionPreference = $previousErrorActionPreference
+          if ($releaseExists) {
             gh release upload $tag .\TombRaider-Camera-Fix.bat --clobber --repo $repository
           }
           else {
