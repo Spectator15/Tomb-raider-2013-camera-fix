@@ -1068,13 +1068,46 @@ function Write-CameraFixError {
     Write-Host $Message -ForegroundColor Red
 }
 
+function Select-CameraFixUniqueWindowsPaths {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyCollection()]
+        [string[]]$Path
+    )
+
+    $uniquePaths = New-Object 'System.Collections.Generic.List[string]'
+    $seenPaths = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($candidate in @($Path)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            continue
+        }
+
+        try {
+            $fullPath = [IO.Path]::GetFullPath($candidate)
+            $pathRoot = [IO.Path]::GetPathRoot($fullPath)
+            if ($fullPath.Length -gt $pathRoot.Length) {
+                $fullPath = $fullPath.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+            }
+        }
+        catch {
+            continue
+        }
+
+        if ($seenPaths.Add($fullPath)) {
+            $uniquePaths.Add($fullPath)
+        }
+    }
+
+    return @($uniquePaths)
+}
+
 function Get-CameraFixDefaultSteamRoots {
     [CmdletBinding()]
     param()
 
     $override = [Environment]::GetEnvironmentVariable('TRCF_STEAM_ROOTS', 'Process')
     if (-not [string]::IsNullOrWhiteSpace($override)) {
-        return @($override.Split([IO.Path]::PathSeparator) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        return @(Select-CameraFixUniqueWindowsPaths -Path $override.Split([IO.Path]::PathSeparator))
     }
 
     $roots = New-Object 'System.Collections.Generic.List[string]'
@@ -1103,9 +1136,7 @@ function Get-CameraFixDefaultSteamRoots {
         }
     }
 
-    return @($roots | ForEach-Object {
-        try { [IO.Path]::GetFullPath($_) } catch { $null }
-    } | Where-Object { $_ } | Select-Object -Unique)
+    return @(Select-CameraFixUniqueWindowsPaths -Path @($roots))
 }
 
 function Get-CameraFixSteamLibraries {
@@ -1141,7 +1172,7 @@ function Get-CameraFixSteamLibraries {
             # Ignore malformed or inaccessible candidate roots and continue.
         }
     }
-    return @($libraries | Select-Object -Unique)
+    return @(Select-CameraFixUniqueWindowsPaths -Path @($libraries))
 }
 
 function Find-CameraFixSteamExecutables {
@@ -1160,7 +1191,7 @@ function Find-CameraFixSteamExecutables {
             [IO.Path]::GetFullPath($candidate)
         }
     }
-    return @($found | Select-Object -Unique)
+    return @(Select-CameraFixUniqueWindowsPaths -Path @($found))
 }
 
 function Select-CameraFixFileWithDialog {

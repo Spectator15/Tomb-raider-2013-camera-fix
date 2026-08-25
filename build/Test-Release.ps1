@@ -255,6 +255,16 @@ try {
 
     . $enginePath
 
+    $LibraryMode = $true
+    $StandaloneBatchPath = $null
+    $ElevatedFromEnvironment = $false
+    $ExePath = $null
+    $Action = 'Menu'
+    $ApplyConfirmed = $false
+    $PauseAfterAction = $false
+    $TestFailurePoint = 'None'
+    . $interfacePath
+
     Invoke-CameraFixTest 'Known patch definitions are byte-for-byte unchanged' {
         $expected = [ordered]@{
             WobbleOriginal = '8B CF E8 DB FD 41 00 84 C0 74 14 56'
@@ -505,16 +515,14 @@ namespace TombRaiderCameraFixFixture
         }
     }
 
-    Invoke-CameraFixTest 'Steam library parsing and multiple-install discovery work with disposable folders' {
-        $LibraryMode = $true
-        $StandaloneBatchPath = $null
-        $ElevatedFromEnvironment = $false
-        $ExePath = $null
-        $Action = 'Menu'
-        $ApplyConfirmed = $false
-        $PauseAfterAction = $false
-        $TestFailurePoint = 'None'
-        . $interfacePath
+    Invoke-CameraFixTest 'Windows installation paths are normalized and deduplicated case-insensitively' {
+        $displayPath = Join-Path $script:TestRoot 'Normally Cased\TombRaider.exe'
+        $uniquePaths = @(Select-CameraFixUniqueWindowsPaths -Path @($displayPath, $displayPath.ToLowerInvariant(), "$displayPath\"))
+        Assert-CameraFixEqual -Expected 1 -Actual $uniquePaths.Count -Message 'Capitalization or a trailing separator produced a duplicate Windows path.'
+        Assert-CameraFixEqual -Expected ([IO.Path]::GetFullPath($displayPath)) -Actual $uniquePaths[0] -Message 'The first normalized path spelling was not preserved for display.'
+    }
+
+    Invoke-CameraFixTest 'Steam discovery merges duplicate methods but keeps separate installations' {
 
         $steamRoot = Join-Path $script:TestRoot 'fake-steam'
         $secondLibrary = Join-Path $script:TestRoot 'fake-library'
@@ -523,18 +531,38 @@ namespace TombRaiderCameraFixFixture
         [IO.Directory]::CreateDirectory((Join-Path $steamRoot 'steamapps')) | Out-Null
         [IO.Directory]::CreateDirectory($rootGameDirectory) | Out-Null
         [IO.Directory]::CreateDirectory($libraryGameDirectory) | Out-Null
-        [IO.File]::Copy($script:FixtureSeedPath, (Join-Path $rootGameDirectory 'TombRaider.exe'), $false)
-        [IO.File]::Copy($script:FixtureSeedPath, (Join-Path $libraryGameDirectory 'TombRaider.exe'), $false)
+        [IO.File]::WriteAllBytes((Join-Path $rootGameDirectory 'TombRaider.exe'), [byte[]]@())
+        [IO.File]::WriteAllBytes((Join-Path $libraryGameDirectory 'TombRaider.exe'), [byte[]]@())
 
+        $escapedRootPath = $steamRoot.ToLowerInvariant().Replace('\', '\\')
         $escapedLibraryPath = $secondLibrary.Replace('\', '\\')
-        $vdf = '"libraryfolders"' + [Environment]::NewLine + '{' + [Environment]::NewLine + '  "1"' + [Environment]::NewLine + '  {' + [Environment]::NewLine + "    `"path`" `"$escapedLibraryPath`"" + [Environment]::NewLine + '  }' + [Environment]::NewLine + '}'
+        $vdf = '"libraryfolders"' + [Environment]::NewLine + '{' + [Environment]::NewLine + '  "0"' + [Environment]::NewLine + '  {' + [Environment]::NewLine + "    `"path`" `"$escapedRootPath`"" + [Environment]::NewLine + '  }' + [Environment]::NewLine + '  "1"' + [Environment]::NewLine + '  {' + [Environment]::NewLine + "    `"path`" `"$escapedLibraryPath`"" + [Environment]::NewLine + '  }' + [Environment]::NewLine + '}'
         [IO.File]::WriteAllText((Join-Path $steamRoot 'steamapps\libraryfolders.vdf'), $vdf, (New-Object Text.UTF8Encoding($false)))
 
-        $found = @(Find-CameraFixSteamExecutables -SteamRoots @($steamRoot))
-        Assert-CameraFixEqual -Expected 2 -Actual $found.Count -Message 'Multiple disposable Steam installations were not discovered.'
+        $found = @(Find-CameraFixSteamExecutables -SteamRoots @($steamRoot, $steamRoot.ToUpperInvariant()))
+        Assert-CameraFixEqual -Expected 2 -Actual $found.Count -Message 'Duplicate discovery methods were not merged, or separate installations were lost.'
         Assert-CameraFixTest -Condition ($found -contains (Join-Path $rootGameDirectory 'TombRaider.exe')) -Message 'The primary Steam installation was not discovered.'
         Assert-CameraFixTest -Condition ($found -contains (Join-Path $libraryGameDirectory 'TombRaider.exe')) -Message 'The secondary Steam library installation was not discovered.'
         Assert-CameraFixEqual -Expected (Join-Path $libraryGameDirectory 'TombRaider.exe') -Actual (Resolve-CameraFixExePath -RequestedPath $libraryGameDirectory) -Message 'A requested game directory did not resolve to TombRaider.exe.'
+    }
+
+    Invoke-CameraFixTest 'A single unique Steam installation is selected automatically' {
+        $singleSteamRoot = Join-Path $script:TestRoot 'single-steam'
+        $singleGameDirectory = Join-Path $singleSteamRoot 'steamapps\common\Tomb Raider'
+        $singleExecutable = Join-Path $singleGameDirectory 'TombRaider.exe'
+        [IO.Directory]::CreateDirectory($singleGameDirectory) | Out-Null
+        [IO.File]::WriteAllBytes($singleExecutable, [byte[]]@())
+
+        $previousRoots = [Environment]::GetEnvironmentVariable('TRCF_STEAM_ROOTS', 'Process')
+        try {
+            $duplicateRoots = $singleSteamRoot + [IO.Path]::PathSeparator + $singleSteamRoot.ToUpperInvariant()
+            [Environment]::SetEnvironmentVariable('TRCF_STEAM_ROOTS', $duplicateRoots, 'Process')
+            $selected = Resolve-CameraFixExePath
+            Assert-CameraFixEqual -Expected $singleExecutable -Actual $selected -Message 'The single unique installation was not selected automatically.'
+        }
+        finally {
+            [Environment]::SetEnvironmentVariable('TRCF_STEAM_ROOTS', $previousRoots, 'Process')
+        }
     }
 
     Invoke-CameraFixTest 'Generated Batch launcher loads embedded PowerShell and preserves CLI action exits' {

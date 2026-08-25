@@ -21,7 +21,7 @@ The result is freer mouse camera control with substantially less unwanted camera
 1. In Steam, set Tomb Raider (2013) to build `743.0`.
 2. After selecting build `743.0`, use Steam's **Verify integrity of game files** option so the installation is clean and matches that build.
 3. Make sure Tomb Raider is closed.
-4. Download and run [`TombRaider-Camera-Fix.bat`](TombRaider-Camera-Fix.bat).
+4. Download and run [`TombRaider-Camera-Fix.bat`](https://github.com/Spectator15/Tomb-raider-2013-camera-fix/releases/latest/download/TombRaider-Camera-Fix.bat) from the latest release.
    - The utility searches normal Steam folders and Steam libraries for `TombRaider.exe`.
    - If it finds more than one installation, choose the correct one.
    - If it cannot find one automatically, select the executable in the file window or enter its full path.
