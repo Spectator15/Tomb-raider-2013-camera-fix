@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
+  windows-build-and-test:
     runs-on: windows-latest
 
     steps:
@@ -43,9 +43,43 @@ jobs:
           path: TombRaider-Camera-Fix.bat
           if-no-files-found: error
 
+  linux-build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends shellcheck
+
+      - name: Build ready-to-run Linux release
+        run: ./build/Build-LinuxRelease.sh
+
+      - name: Verify generated Linux release is committed
+        run: |
+          if ! git diff --exit-code -- TombRaider-Camera-Fix-Linux.sh; then
+            printf '%s\n' 'TombRaider-Camera-Fix-Linux.sh is out of date. Run ./build/Build-LinuxRelease.sh and commit the result.' >&2
+            exit 1
+          fi
+
+      - name: Run Linux synthetic-fixture tests
+        run: ./build/Test-LinuxRelease.sh
+
+      - name: Upload ready-to-run Linux script
+        uses: actions/upload-artifact@v7
+        with:
+          name: TombRaider-Camera-Fix-Linux
+          path: TombRaider-Camera-Fix-Linux.sh
+          if-no-files-found: error
+
   attach-release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-and-test
+    needs:
+      - windows-build-and-test
+      - linux-build-and-test
     runs-on: windows-latest
     permissions:
       contents: write
@@ -55,8 +89,15 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: TombRaider-Camera-Fix
+          path: release
 
-      - name: Attach batch to tagged GitHub Release
+      - name: Download ready-to-run Linux script
+        uses: actions/download-artifact@v8
+        with:
+          name: TombRaider-Camera-Fix-Linux
+          path: release
+
+      - name: Attach release files to tagged GitHub Release
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
@@ -69,11 +110,20 @@ jobs:
           $releaseExists = ($LASTEXITCODE -eq 0)
           $ErrorActionPreference = $previousErrorActionPreference
           if ($releaseExists) {
-            gh release upload $tag .\TombRaider-Camera-Fix.bat --clobber --repo $repository
+            gh release upload $tag .\release\TombRaider-Camera-Fix.bat .\release\TombRaider-Camera-Fix-Linux.sh --clobber --repo $repository
           }
           else {
-            gh release create $tag .\TombRaider-Camera-Fix.bat --verify-tag --generate-notes --title $tag --repo $repository
+            $arguments = @(
+              'release', 'create', $tag,
+              '.\release\TombRaider-Camera-Fix.bat',
+              '.\release\TombRaider-Camera-Fix-Linux.sh',
+              '--verify-tag', '--generate-notes', '--title', $tag, '--repo', $repository
+            )
+            if ($tag.Contains('-')) {
+              $arguments += '--prerelease'
+            }
+            & gh @arguments
           }
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to attach TombRaider-Camera-Fix.bat to release $tag."
+            throw "Failed to attach the Windows and Linux files to release $tag."
           }
