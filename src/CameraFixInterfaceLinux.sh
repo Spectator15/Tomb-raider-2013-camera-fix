@@ -72,7 +72,7 @@ EOF
 }
 
 # Invoked indirectly by the EXIT trap below.
-# shellcheck disable=SC2329
+# shellcheck disable=SC2317,SC2329
 trcf_cleanup() {
     local temporary
     for temporary in "${TRCF_TEMP_FILES[@]}"; do
