@@ -38,12 +38,12 @@ Normal users do not need to build, combine, or edit anything. The root [`TombRai
 > [!IMPORTANT]
 > Linux support requires the Windows version of Tomb Raider running through Steam Proton. The separate Feral native Linux port is not supported.
 
-Linux support is currently a beta. It has passed synthetic tests on an actual Linux runner, but real Tomb Raider gameplay through Proton has not yet been confirmed.
+Linux support is currently a beta. It has passed synthetic tests on Ubuntu CI and Ubuntu under WSL 2, but real Tomb Raider gameplay through Proton has not yet been confirmed.
 
 1. In Steam, set Tomb Raider (2013) to build `743.0`.
 2. Open **Properties > Compatibility** and force a Proton version. Steam should download the Windows game files.
 3. Use **Verify integrity of game files**, wait for Steam to finish, and make sure the game is closed.
-4. Download [`TombRaider-Camera-Fix-Linux.sh`](https://github.com/Spectator15/Tomb-raider-2013-camera-fix/releases/download/v1.1.0-beta.1/TombRaider-Camera-Fix-Linux.sh).
+4. Download [`TombRaider-Camera-Fix-Linux.sh`](https://github.com/Spectator15/Tomb-raider-2013-camera-fix/releases/download/v1.1.0-beta.2/TombRaider-Camera-Fix-Linux.sh).
 5. In a terminal, make the file executable and run it:
 
    ```bash
