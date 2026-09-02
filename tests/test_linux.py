@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import stat
 import struct
 import subprocess
@@ -164,8 +165,10 @@ class LinuxCameraFixTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="TombRaiderCameraFixLinuxTests-")
         self.root = Path(self.temporary.name)
+        engine._pending_interruption = None
 
     def tearDown(self) -> None:
+        engine._pending_interruption = None
         self.temporary.cleanup()
 
     def native_root(self) -> Path:
@@ -655,6 +658,124 @@ class LinuxCameraFixTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Current state:     Unpatched", result.stdout)
+
+    @unittest.skipUnless(sys.platform == "linux", "launcher preflight runs on the Ubuntu runner")
+    def test_45_launcher_groups_missing_runtime_requirements(self) -> None:
+        release = REPOSITORY_ROOT / "TombRaider-Camera-Fix-Linux.sh"
+        empty_path = self.root / "empty-path"
+        empty_path.mkdir()
+        environment = os.environ.copy()
+        environment["PATH"] = os.fspath(empty_path)
+        result = subprocess.run(
+            ["/bin/bash", os.fspath(release), "--status"],
+            cwd=self.root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Preflight checks failed:", result.stderr)
+        self.assertIn("Missing required tools: awk chmod mktemp python3 rm uname.", result.stderr)
+        self.assertIn("will not install packages or elevate privileges automatically", result.stderr)
+
+        tool_path = self.root / "capability-tools"
+        tool_path.mkdir()
+        for tool in ("awk", "chmod", "mktemp", "rm"):
+            (tool_path / tool).symlink_to(shutil.which(tool))
+        fake_python = tool_path / "python3"
+        fake_python.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        fake_uname = tool_path / "uname"
+        fake_uname.write_text('#!/bin/sh\ncase "$1" in\n  -s) echo Linux ;;\n  -m) echo aarch64 ;;\nesac\n', encoding="utf-8")
+        fake_uname.chmod(0o755)
+        environment["PATH"] = os.fspath(tool_path)
+        result = subprocess.run(
+            ["/bin/bash", os.fspath(release), "--status"],
+            cwd=self.root,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Python 3.8 or newer is required, and python3 must be runnable.", result.stderr)
+        self.assertIn("x86_64 architecture is required. Detected: aarch64.", result.stderr)
+
+    def test_46_keyboard_interrupt_rolls_back_and_cleans_temporary_files(self) -> None:
+        installation = make_installation(self.native_root())
+        original_hash = engine.sha256_file(installation.executable)
+        executable_snapshot, manifest_snapshot = engine.assert_operation_safe(installation)
+        original = engine.inspect_executable(installation.executable)
+        prepared_data, _, prepared_hash = engine.prepare_complete_patch(original)
+        prepared = engine._write_prepared_near(installation.executable, prepared_data, ".TombRaiderCameraFix-test-")
+
+        def interrupt_final_verification() -> None:
+            raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt):
+            engine._transactional_replace(
+                installation,
+                prepared,
+                prepared_hash,
+                executable_snapshot,
+                manifest_snapshot,
+                interrupt_final_verification,
+                "none",
+            )
+        self.assertEqual(engine.sha256_file(installation.executable), original_hash)
+        leftovers = [path for path in installation.game_directory.iterdir() if path.name.startswith(".TombRaiderCameraFix-")]
+        self.assertEqual(leftovers, [])
+
+    def test_47_sigint_and_sigterm_are_deferred_until_rollback_is_safe(self) -> None:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            installation = make_installation(self.root / signal.Signals(signum).name)
+            original_hash = engine.sha256_file(installation.executable)
+            executable_snapshot, manifest_snapshot = engine.assert_operation_safe(installation)
+            original = engine.inspect_executable(installation.executable)
+            prepared_data, _, prepared_hash = engine.prepare_complete_patch(original)
+            prepared = engine._write_prepared_near(installation.executable, prepared_data, ".TombRaiderCameraFix-test-")
+
+            def record_signal() -> None:
+                engine._record_operation_interruption(signum, None)
+
+            with self.assertRaises(engine.OperationInterrupted) as raised:
+                engine._transactional_replace(
+                    installation,
+                    prepared,
+                    prepared_hash,
+                    executable_snapshot,
+                    manifest_snapshot,
+                    record_signal,
+                    "none",
+                )
+            self.assertEqual(raised.exception.exit_code, 128 + signum)
+            self.assertFalse(raised.exception.operation_completed)
+            self.assertEqual(engine.sha256_file(installation.executable), original_hash)
+            leftovers = [path for path in installation.game_directory.iterdir() if path.name.startswith(".TombRaiderCameraFix-")]
+            self.assertEqual(leftovers, [])
+            engine._pending_interruption = None
+
+    def test_48_interrupted_writes_remove_partial_files(self) -> None:
+        sidecar = self.root / "partial-sidecar"
+        with mock.patch.object(engine.os, "write", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                engine._write_exclusive(sidecar, b"partial data")
+        self.assertFalse(sidecar.exists())
+
+        installation = make_installation(self.native_root())
+        with mock.patch.object(engine.os, "write", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                engine._write_prepared_near(installation.executable, b"prepared data", ".TombRaiderCameraFix-interrupted-")
+        leftovers = [path for path in installation.game_directory.iterdir() if path.name.startswith(".TombRaiderCameraFix-")]
+        self.assertEqual(leftovers, [])
+
+    def test_49_noninteractive_signal_exit_code_is_preserved(self) -> None:
+        interruption = engine.OperationInterrupted(signal.SIGTERM)
+        with mock.patch.object(engine, "ensure_linux_runtime"), mock.patch.object(engine, "discover_installations", side_effect=interruption):
+            self.assertEqual(engine.main(["discover"]), 128 + signal.SIGTERM)
 
 
 if __name__ == "__main__":

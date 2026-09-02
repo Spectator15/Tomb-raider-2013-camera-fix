@@ -71,6 +71,55 @@ The separate Feral native Linux port is not supported.
 EOF
 }
 
+trcf_preflight() {
+    local -a missing_tools=()
+    local -a problems=()
+    local tool system architecture
+
+    if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+        problems+=("Bash 4.4 or newer is required. Detected: ${BASH_VERSION:-unknown}.")
+    fi
+
+    for tool in awk chmod mktemp python3 rm uname; do
+        if ! command -v -- "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
+    if (( ${#missing_tools[@]} > 0 )); then
+        problems+=("Missing required tools: ${missing_tools[*]}.")
+    fi
+
+    if command -v -- python3 >/dev/null 2>&1 && ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+        problems+=("Python 3.8 or newer is required, and python3 must be runnable.")
+    fi
+
+    if command -v -- uname >/dev/null 2>&1; then
+        system=$(uname -s 2>/dev/null || true)
+        architecture=$(uname -m 2>/dev/null || true)
+        if [[ $system != 'Linux' ]]; then
+            problems+=("Desktop Linux is required. Detected: ${system:-unknown}.")
+        fi
+        case $architecture in
+            x86_64|amd64) ;;
+            *) problems+=("x86_64 architecture is required. Detected: ${architecture:-unknown}.") ;;
+        esac
+    fi
+
+    if (( EUID == 0 )); then
+        problems+=("Running as root or with sudo is not supported. Run the patcher as your normal Steam user.")
+    fi
+
+    if (( ${#problems[@]} > 0 )); then
+        trcf_error 'Preflight checks failed:'
+        for tool in "${problems[@]}"; do
+            trcf_error "  - $tool"
+        done
+        trcf_error 'Install or enable the required tools and correct the unsupported conditions, then run this file again.'
+        trcf_error 'This utility will not install packages or elevate privileges automatically.'
+        return 1
+    fi
+}
+
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2317,SC2329
 trcf_cleanup() {
@@ -281,26 +330,7 @@ trcf_parse_arguments() {
 
 trcf_main() {
     trcf_parse_arguments "$@" || return 2
-    if (( EUID == 0 )); then
-        trcf_error 'Do not run this patcher as root or with sudo. Run it as your normal Steam user.'
-        return 1
-    fi
-    if [[ $(uname -s) != 'Linux' ]]; then
-        trcf_error 'This release supports desktop Linux only.'
-        return 1
-    fi
-    case $(uname -m) in
-        x86_64|amd64) ;;
-        *)
-            trcf_error "Only x86_64 desktop Linux is supported. Detected: $(uname -m)."
-            return 1
-            ;;
-    esac
-    if ! command -v python3 >/dev/null 2>&1; then
-        trcf_error 'Python 3 is required. Install your distribution Python 3 package, then run this file again.'
-        trcf_error 'This utility will not install packages automatically.'
-        return 1
-    fi
+    trcf_preflight || return 1
     trcf_prepare_engine || return 1
     trcf_heading
     if [[ -n $TRCF_GAME_PATH ]]; then
@@ -329,7 +359,10 @@ trcf_main() {
         printf '[3] Status and diagnostics\n'
         printf '[4] Choose another installation\n'
         printf '[5] Exit\n\n'
-        read -r -p 'Choose 1, 2, 3, 4 or 5: ' choice
+        if ! read -r -p 'Choose 1, 2, 3, 4 or 5: ' choice; then
+            trcf_warning 'Input ended. Nothing was changed.'
+            return 1
+        fi
         case $choice in
             1) trcf_apply || true ;;
             2) trcf_restore || true ;;
@@ -342,7 +375,9 @@ trcf_main() {
 }
 
 trap trcf_cleanup EXIT
-trap 'exit 130' HUP INT TERM
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 trcf_main "$@"
 exit $?
 

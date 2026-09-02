@@ -71,6 +71,55 @@ The separate Feral native Linux port is not supported.
 EOF
 }
 
+trcf_preflight() {
+    local -a missing_tools=()
+    local -a problems=()
+    local tool system architecture
+
+    if (( BASH_VERSINFO[0] < 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] < 4) )); then
+        problems+=("Bash 4.4 or newer is required. Detected: ${BASH_VERSION:-unknown}.")
+    fi
+
+    for tool in awk chmod mktemp python3 rm uname; do
+        if ! command -v -- "$tool" >/dev/null 2>&1; then
+            missing_tools+=("$tool")
+        fi
+    done
+    if (( ${#missing_tools[@]} > 0 )); then
+        problems+=("Missing required tools: ${missing_tools[*]}.")
+    fi
+
+    if command -v -- python3 >/dev/null 2>&1 && ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+        problems+=("Python 3.8 or newer is required, and python3 must be runnable.")
+    fi
+
+    if command -v -- uname >/dev/null 2>&1; then
+        system=$(uname -s 2>/dev/null || true)
+        architecture=$(uname -m 2>/dev/null || true)
+        if [[ $system != 'Linux' ]]; then
+            problems+=("Desktop Linux is required. Detected: ${system:-unknown}.")
+        fi
+        case $architecture in
+            x86_64|amd64) ;;
+            *) problems+=("x86_64 architecture is required. Detected: ${architecture:-unknown}.") ;;
+        esac
+    fi
+
+    if (( EUID == 0 )); then
+        problems+=("Running as root or with sudo is not supported. Run the patcher as your normal Steam user.")
+    fi
+
+    if (( ${#problems[@]} > 0 )); then
+        trcf_error 'Preflight checks failed:'
+        for tool in "${problems[@]}"; do
+            trcf_error "  - $tool"
+        done
+        trcf_error 'Install or enable the required tools and correct the unsupported conditions, then run this file again.'
+        trcf_error 'This utility will not install packages or elevate privileges automatically.'
+        return 1
+    fi
+}
+
 # Invoked indirectly by the EXIT trap below.
 # shellcheck disable=SC2317,SC2329
 trcf_cleanup() {
@@ -281,26 +330,7 @@ trcf_parse_arguments() {
 
 trcf_main() {
     trcf_parse_arguments "$@" || return 2
-    if (( EUID == 0 )); then
-        trcf_error 'Do not run this patcher as root or with sudo. Run it as your normal Steam user.'
-        return 1
-    fi
-    if [[ $(uname -s) != 'Linux' ]]; then
-        trcf_error 'This release supports desktop Linux only.'
-        return 1
-    fi
-    case $(uname -m) in
-        x86_64|amd64) ;;
-        *)
-            trcf_error "Only x86_64 desktop Linux is supported. Detected: $(uname -m)."
-            return 1
-            ;;
-    esac
-    if ! command -v python3 >/dev/null 2>&1; then
-        trcf_error 'Python 3 is required. Install your distribution Python 3 package, then run this file again.'
-        trcf_error 'This utility will not install packages automatically.'
-        return 1
-    fi
+    trcf_preflight || return 1
     trcf_prepare_engine || return 1
     trcf_heading
     if [[ -n $TRCF_GAME_PATH ]]; then
@@ -329,7 +359,10 @@ trcf_main() {
         printf '[3] Status and diagnostics\n'
         printf '[4] Choose another installation\n'
         printf '[5] Exit\n\n'
-        read -r -p 'Choose 1, 2, 3, 4 or 5: ' choice
+        if ! read -r -p 'Choose 1, 2, 3, 4 or 5: ' choice; then
+            trcf_warning 'Input ended. Nothing was changed.'
+            return 1
+        fi
         case $choice in
             1) trcf_apply || true ;;
             2) trcf_restore || true ;;
@@ -342,7 +375,9 @@ trcf_main() {
 }
 
 trap trcf_cleanup EXIT
-trap 'exit 130' HUP INT TERM
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 trcf_main "$@"
 exit $?
 
@@ -367,6 +402,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import stat
 import struct
 import sys
@@ -396,11 +432,29 @@ class CameraFixError(RuntimeError):
     """A safe, user-facing refusal or validation error."""
 
 
+class OperationInterrupted(BaseException):
+    """A termination signal that must still pass through transaction cleanup."""
+
+    def __init__(self, signum: int, operation_completed: bool = False):
+        self.signum = signum
+        self.operation_completed = operation_completed
+        try:
+            self.signal_name = signal.Signals(signum).name
+        except ValueError:
+            self.signal_name = f"signal {signum}"
+        super().__init__(self.signal_name)
+
+    @property
+    def exit_code(self) -> int:
+        return 128 + self.signum
+
+
 class VdfError(CameraFixError):
     """Malformed or unsafe Valve KeyValues data."""
 
 
 VdfNode = list[tuple[str, Union[str, "VdfNode"]]]
+_pending_interruption: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -1251,16 +1305,26 @@ def _fsync_directory(directory: Path) -> None:
 
 def _write_exclusive(path: Path, data: bytes, mode: int = 0o600) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    completed = False
     try:
+        _check_for_interruption()
         view = memoryview(data)
         while view:
             written = os.write(descriptor, view)
             if written <= 0:
                 raise CameraFixError(f"Writing stopped unexpectedly: {path}")
             view = view[written:]
+            _check_for_interruption()
         os.fsync(descriptor)
+        _check_for_interruption()
+        completed = True
     finally:
         os.close(descriptor)
+        if not completed:
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 def snapshot_file(path: Path) -> FileSnapshot:
@@ -1319,7 +1383,7 @@ def create_original_backup(executable: Path) -> tuple[bool, BackupValidation]:
         if not validation.valid:
             raise CameraFixError(f"The new backup set failed validation: {validation.reason}")
         return True, validation
-    except Exception:
+    except BaseException:
         if backup_created and not manifest_created:
             try:
                 backup_path.unlink()
@@ -1396,6 +1460,7 @@ def _write_prepared_near(target: Path, data: bytes, prefix: str) -> Path:
     descriptor, temporary_name = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=target.parent)
     temporary = Path(temporary_name)
     try:
+        _check_for_interruption()
         temporary_stat = os.fstat(descriptor)
         if temporary_stat.st_dev != target_stat.st_dev:
             raise CameraFixError("The temporary file is not on the target filesystem; atomic replacement is unavailable.")
@@ -1411,8 +1476,10 @@ def _write_prepared_near(target: Path, data: bytes, prefix: str) -> Path:
             if written <= 0:
                 raise CameraFixError("Writing the prepared executable stopped unexpectedly.")
             view = view[written:]
+            _check_for_interruption()
         os.fsync(descriptor)
-    except Exception:
+        _check_for_interruption()
+    except BaseException:
         os.close(descriptor)
         try:
             temporary.unlink()
@@ -1516,40 +1583,52 @@ def _transactional_replace(
     failure_point: str,
 ) -> None:
     target = installation.executable
-    rollback = _write_prepared_near(target, target.read_bytes(), ".TombRaiderCameraFix-rollback-")
-    rollback_hash = sha256_file(rollback)
+    rollback: Optional[Path] = None
+    rollback_hash = ""
     replaced = False
     preserve_rollback = False
+    committed = False
     try:
+        _check_for_interruption()
+        rollback = _write_prepared_near(target, target.read_bytes(), ".TombRaiderCameraFix-rollback-")
+        rollback_hash = sha256_file(rollback)
         if failure_point == "after_temp_write":
             raise CameraFixError("Simulated failure after temporary-file preparation.")
         _recheck_operation_safe(installation, executable_snapshot, manifest_snapshot)
+        _check_for_interruption()
         if sha256_file(prepared) != prepared_hash:
             raise CameraFixError("The prepared executable changed before replacement.")
         if failure_point == "before_replace":
             raise CameraFixError("Simulated failure before atomic replacement.")
-        os.replace(prepared, target)
         replaced = True
+        os.replace(prepared, target)
+        _check_for_interruption()
         _fsync_directory(target.parent)
+        _check_for_interruption()
         if failure_point == "after_replace":
             raise CameraFixError("Simulated failure after atomic replacement.")
         final_validator()
+        _check_for_interruption()
         if failure_point == "after_final_verification":
             raise CameraFixError("Simulated failure after final verification.")
-    except Exception as original_error:
+        committed = True
+    except BaseException as original_error:
         if replaced:
+            assert rollback is not None
             try:
                 os.replace(rollback, target)
                 _fsync_directory(target.parent)
                 replaced = False
                 if sha256_file(target) != rollback_hash:
                     raise CameraFixError("The rollback hash does not match the pre-operation executable.")
-            except Exception as rollback_error:
+            except BaseException as rollback_error:
                 preserve_rollback = True
                 raise CameraFixError(f"The operation failed: {original_error}. Automatic rollback also failed: {rollback_error}. A verified rollback file remains at {rollback}.") from rollback_error
         raise
     finally:
         for temporary in (prepared, rollback):
+            if temporary is None:
+                continue
             if temporary == rollback and preserve_rollback:
                 continue
             try:
@@ -1557,6 +1636,8 @@ def _transactional_replace(
                     temporary.unlink()
             except OSError:
                 pass
+    if committed:
+        _check_for_interruption(operation_completed=True)
 
 
 def apply_fix(installation: Installation, failure_point: str = "none") -> dict:
@@ -1666,6 +1747,27 @@ def ensure_linux_runtime() -> None:
         raise CameraFixError("Do not run this patcher as root or with sudo. Run it as your normal Steam user.")
 
 
+def _record_operation_interruption(signum: int, _frame: object) -> None:
+    global _pending_interruption
+    if _pending_interruption is None:
+        _pending_interruption = signum
+
+
+def _check_for_interruption(operation_completed: bool = False) -> None:
+    if _pending_interruption is not None:
+        raise OperationInterrupted(_pending_interruption, operation_completed)
+
+
+def install_signal_handlers() -> None:
+    """Defer termination signals to explicit transaction-safe checkpoints."""
+    global _pending_interruption
+    _pending_interruption = None
+    for signal_name in ("SIGHUP", "SIGINT", "SIGTERM"):
+        signum = getattr(signal, signal_name, None)
+        if signum is not None:
+            signal.signal(signum, _record_operation_interruption)
+
+
 def _write_installation_record(installation: Installation) -> None:
     for value in (installation.steam_type, os.fspath(installation.executable)):
         sys.stdout.buffer.write(os.fsencode(value) + b"\x00")
@@ -1682,8 +1784,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         choices=("none", "after_backup", "after_temp_write", "before_replace", "after_replace", "after_final_verification"),
         help=argparse.SUPPRESS,
     )
-    args = parser.parse_args(argv)
     try:
+        if argv is None:
+            install_signal_handlers()
+        args = parser.parse_args(argv)
         ensure_linux_runtime()
         if args.command == "discover":
             installations, diagnostics = discover_installations()
@@ -1691,11 +1795,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(diagnostic, file=sys.stderr)
             for installation in installations:
                 _write_installation_record(installation)
+            _check_for_interruption()
             return 0
         if args.command == "resolve":
             if not args.path:
                 raise CameraFixError("Manual resolution requires --path.")
             _write_installation_record(resolve_manual_installation(args.path))
+            _check_for_interruption()
             return 0
         if not args.path:
             raise CameraFixError(f"{args.command} requires --path.")
@@ -1712,7 +1818,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             result = restore_original(installation, args.failure_point)
             print(result["message"])
             print(f"Original SHA-256: {result['sha256']}")
+        _check_for_interruption(operation_completed=args.command in ("apply", "restore"))
         return 0
+    except OperationInterrupted as exc:
+        if exc.operation_completed:
+            detail = "The verified executable operation completed, and temporary files were cleaned up."
+        else:
+            detail = "No incomplete executable replacement or temporary file was left behind."
+        print(f"Interrupted by {exc.signal_name}. {detail}", file=sys.stderr)
+        return exc.exit_code
+    except KeyboardInterrupt:
+        print("Interrupted by SIGINT. Any in-progress executable replacement was rolled back.", file=sys.stderr)
+        return 130
     except (CameraFixError, OSError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

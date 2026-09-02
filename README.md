@@ -53,7 +53,7 @@ Linux support is currently a beta. It has passed synthetic tests on an actual Li
 
 6. Choose **Apply complete camera fix**, then start the game normally through Steam with Proton enabled.
 
-Python 3 is required. Protontricks is not required, and the utility does not modify Proton prefixes, install packages, add Wine DLL overrides, change Steam compatibility settings, or convert save files.
+Python 3.8 or newer is required. Protontricks is not required, and the utility does not modify Proton prefixes, install packages, add Wine DLL overrides, change Steam compatibility settings, or convert save files.
 
 The Linux utility detects native Steam, Flatpak Steam, secondary and external Steam libraries, and Steam Deck installations in Desktop Mode. If automatic discovery cannot identify the correct installation, use its manual-path option. Manual selection still requires a valid App ID `203160` Steam manifest and every normal executable safety check.
 
